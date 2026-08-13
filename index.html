@@ -1,4 +1,4 @@
-<!DOCTYPE html><!-- v4 -->
+<!DOCTYPE html><!-- v5 -->
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Airos Arquitetura — Gestão do Estúdio</title>
@@ -4306,6 +4306,42 @@ function runMigrations(){
       ?['dashboard','projetos','equipe','oportunidades','meus_projetos','atendimento','financeiro','fin_rel','config','usuarios']
       :['dashboard','projetos','meus_projetos','equipe'];
   });
+}
+
+function icalDateToISO(dt){
+  if(!dt) return '';
+  var d=dt.replace(/Z$/,'').replace(/[^0-9T]/g,'');
+  if(d.length===8) return d.slice(0,4)+'-'+d.slice(4,6)+'-'+d.slice(6,8);
+  if(d.length>=15) return d.slice(0,4)+'-'+d.slice(4,6)+'-'+d.slice(6,8);
+  return '';
+}
+
+function parseIcal(raw){
+  var events=[];
+  var lines=raw.split('\n');
+  var ev=null;
+  lines.forEach(function(line){
+    line=line.replace(/\r$/,'');
+    if(line==='BEGIN:VEVENT'){ ev={}; return; }
+    if(line==='END:VEVENT'){
+      if(ev&&ev.start&&ev.summary){
+        events.push({id:ev.uid||uid(),title:ev.summary,start:icalDateToISO(ev.start),end:icalDateToISO(ev.end||ev.start),allDay:ev.start.indexOf('T')<0,location:ev.location||'',description:ev.description||'',source:'google'});
+      }
+      ev=null; return;
+    }
+    if(!ev) return;
+    var col=line.indexOf(':');
+    if(col<0) return;
+    var key=line.slice(0,col).split(';')[0].toUpperCase();
+    var val=line.slice(col+1);
+    if(key==='SUMMARY') ev.summary=val;
+    else if(key==='DTSTART') ev.start=val;
+    else if(key==='DTEND') ev.end=val;
+    else if(key==='UID') ev.uid=val;
+    else if(key==='LOCATION') ev.location=val;
+    else if(key==='DESCRIPTION') ev.description=val;
+  });
+  return events;
 }
 
 function render(){
