@@ -1,4 +1,4 @@
-<!DOCTYPE html><!-- v5 -->
+<!DOCTYPE html><!-- v7 -->
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Airos Arquitetura — Gestão do Estúdio</title>
@@ -405,43 +405,54 @@
 
 // ── STORAGE ──────────────────────────────────────────────────────────────────
 var KEY = 'airos_v5';
+var _supaReady=false;
+var _supaSyncing=false;
 function loadDB(){ try{ var v=localStorage.getItem(KEY); return v?JSON.parse(v):null; }catch(e){ return null; } }
-function saveDB(d){
-  d._savedAt=Date.now();
-  try{ localStorage.setItem(KEY,JSON.stringify(d)); }catch(e){}
-  if(_supaReady) supaPush(d);
-}
+
+// ── SUPABASE ──────────────────────────────────────────────────────────────────
+var SUPA_URL='https://cgpqxzlckfcahjkmkfws.supabase.co';
+var SUPA_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNncHF4emxja2ZjYWhqa21rZndzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODU5OTg1NzYsImV4cCI6MjEwMTU3NDU3Nn0.dPXN5TR2XKJM0HLMuScv1RiLL3hH71feLnhEoiiYITQ';
 
 function supaHeaders(){
   return {
     'Content-Type':'application/json',
-    'apikey':'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNncHF4emxja2ZjYWhqa21rZndzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODU5OTg1NzYsImV4cCI6MjEwMTU3NDU3Nn0.dPXN5TR2XKJM0HLMuScv1RiLL3hH71feLnhEoiiYITQ',
-    'Authorization':'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNncHF4emxja2ZjYWhqa21rZndzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODU5OTg1NzYsImV4cCI6MjEwMTU3NDU3Nn0.dPXN5TR2XKJM0HLMuScv1RiLL3hH71feLnhEoiiYITQ'
+    'apikey':SUPA_KEY,
+    'Authorization':'Bearer '+SUPA_KEY
   };
 }
 
 function supaPush(data){
   if(_supaSyncing) return;
   _supaSyncing=true;
-  fetch('https://cgpqxzlckfcahjkmkfws.supabase.co/rest/v1/studio_data?id=eq.airos',{
+  data._savedAt=Date.now();
+  try{ localStorage.setItem(KEY,JSON.stringify(data)); }catch(e){}
+  fetch(SUPA_URL+'/rest/v1/studio_data?id=eq.airos',{
     method:'PATCH',
     headers:Object.assign({},supaHeaders(),{'Prefer':'return=minimal'}),
     body:JSON.stringify({data:data,updated_at:new Date().toISOString()})
   }).then(function(r){
     _supaSyncing=false;
-    if(r.status===404){
-      fetch('https://cgpqxzlckfcahjkmkfws.supabase.co/rest/v1/studio_data',{
+    _supaReady=true;
+    if(r.status===404||r.status===0){
+      fetch(SUPA_URL+'/rest/v1/studio_data',{
         method:'POST',
         headers:Object.assign({},supaHeaders(),{'Prefer':'return=minimal'}),
         body:JSON.stringify({id:'airos',data:data,updated_at:new Date().toISOString()})
       });
     }
-  }).catch(function(){ _supaSyncing=false; });
+  }).catch(function(){ 
+    _supaSyncing=false;
+    // retry after 10s
+    setTimeout(function(){ supaPush(data); }, 10000);
+  });
 }
 
 function supaLoad(){
-  fetch('https://cgpqxzlckfcahjkmkfws.supabase.co/rest/v1/studio_data?id=eq.airos&select=data',{headers:supaHeaders()})
-    .then(function(r){ return r.json(); })
+  fetch(SUPA_URL+'/rest/v1/studio_data?id=eq.airos&select=data',{headers:supaHeaders()})
+    .then(function(r){
+      if(!r.ok) throw new Error('HTTP '+r.status);
+      return r.json();
+    })
     .then(function(rows){
       _supaReady=true;
       if(rows&&rows.length&&rows[0].data&&rows[0].data.users){
@@ -459,8 +470,23 @@ function supaLoad(){
         supaPush(db);
       }
     })
-    .catch(function(){ _supaReady=false; });
+    .catch(function(e){
+      console.warn('Supabase unavailable:',e.message);
+      _supaReady=false;
+      // retry every 30 seconds
+      setTimeout(supaLoad, 30000);
+    });
 }
+
+function saveDB(d){
+  d._savedAt=Date.now();
+  try{ localStorage.setItem(KEY,JSON.stringify(d)); }catch(e){}
+  supaPush(d);
+}
+
+
+
+
 
 function supaIcalProxy(url,cb){
   fetch('/.netlify/functions/ical-proxy',{
@@ -557,6 +583,8 @@ db.crmProjects.forEach(function(p){
   if(!p.approvals) p.approvals=[];
   if(!p.approvalToken) p.approvalToken=uid()+uid();
   if(!p.atas) p.atas=[];  // [{id,ver,stageId,stageName,date,raw,structured,ataNotes,ataStatus,ataToken,ts}]
+  if(!p.clienteToken) p.clienteToken=uid()+uid();  // unique token for client portal
+  if(!p.clienteComments) p.clienteComments=[];  // [{id,text,ts,author}]
 });
 db.leads.forEach(function(l){ if(!l.briefing) l.briefing={}; });
 if(!db.studioLogo) db.studioLogo='';
@@ -633,39 +661,49 @@ function renderLogin(err){
   view.innerHTML = '<div class="login"><div class="login-card">'
     +'<div class="login-brand"><img src="'+LOGO+'" alt="Airos" style="width:200px;height:auto;display:block;margin:0 auto"></div>'
     +'<div class="login-tag">Gestao do estudio — projetos &amp; oportunidades</div>'
-    +'<div class="login-panel">'
+    +'<div class="login-panel" style="padding:24px">'
+    +'<div class="field" style="margin-bottom:12px">'
+    +'<label style="font-size:12px;font-weight:600;color:var(--dim);text-transform:uppercase;letter-spacing:.08em">Usuário</label>'
+    +'<select class="inp" id="lg-user" style="margin-top:6px">'
+    +'<option value="">Selecione seu usuário…</option>'
     +db.users.map(function(u){
-      var pass = loginSel===u.id
-        ? '<div class="login-pass"><input class="inp" type="password" id="lg-pass" placeholder="Senha" autofocus><button class="btn sm" id="lg-go">Entrar</button></div>'
-          +(err?'<div class="field-err" style="padding:0 13px 10px 55px">'+err+'</div>':'')
-        : '';
-      return '<div><button class="login-user" data-id="'+u.id+'">'
-        +'<span class="avatar">'+initials(u.name)+'</span>'
-        +'<span class="n">'+esc(u.name)+'</span>'
-        +'<span class="r">'+(u.role==='admin'?'Administrador':'Equipe')+'</span>'
-        +'</button>'+pass+'</div>';
+      return '<option value="'+u.id+'">'+esc(u.name)+'</option>';
     }).join('')
+    +'</select>'
     +'</div>'
-    +'<div class="login-note">Selecione seu nome e informe sua senha.</div>'
+    +'<div class="field" style="margin-bottom:16px">'
+    +'<label style="font-size:12px;font-weight:600;color:var(--dim);text-transform:uppercase;letter-spacing:.08em">Senha</label>'
+    +'<input class="inp" type="password" id="lg-pass" placeholder="Digite sua senha" style="margin-top:6px">'
+    +'</div>'
+    +(err?'<div style="color:var(--alerta);font-size:13px;margin-bottom:12px">'+esc(err)+'</div>':'')
+    +'<button class="btn" id="lg-go" style="width:100%;padding:13px">Entrar</button>'
+    +'</div>'
     +'</div></div>';
 
-  [].forEach.call(view.querySelectorAll('.login-user'),function(b){
-    b.onclick = function(){ loginSel = loginSel===b.dataset.id ? null : b.dataset.id; renderLogin(); };
-  });
-  var go=view.querySelector('#lg-go'), pass=view.querySelector('#lg-pass');
-  if(go){
-    function attempt(){
-      var u=db.users.find(function(x){ return x.id===loginSel; });
-      if(u&&pass.value===u.pass){ db.sessionUserId=u.id; save(); render(); }
-      else renderLogin('Senha incorreta.');
-    }
-    go.onclick=attempt;
-    pass.onkeydown=function(e){ if(e.key==='Enter') attempt(); };
-    setTimeout(function(){ pass.focus(); },50);
+  var userSel = document.getElementById('lg-user');
+  var passInp = document.getElementById('lg-pass');
+  var btn = document.getElementById('lg-go');
+
+  // Focus password when user selected
+  if(userSel) userSel.onchange = function(){ if(passInp) passInp.focus(); };
+
+  function tryLogin(){
+    var uid2 = userSel ? userSel.value : '';
+    var pass = passInp ? passInp.value : '';
+    if(!uid2){ renderLogin('Selecione seu usuario.'); return; }
+    var u = db.users.find(function(x){ return x.id===uid2; });
+    if(!u){ renderLogin('Usuario nao encontrado.'); return; }
+    var storedPass = u.password||u.pass||'';
+    if(pass !== storedPass){ renderLogin('Senha incorreta.'); return; }
+    db.sessionUserId = u.id;
+    save(); render();
   }
+
+  if(btn) btn.onclick = tryLogin;
+  if(passInp) passInp.onkeydown = function(e){ if(e.key==='Enter') tryLogin(); };
 }
 
-// ── SHELL ─────────────────────────────────────────────────────────────────────
+
 function shell(inner){
   var u=me();
   function active(k){ return (k===state.page||(k==='projetos'&&state.projectId))?'active':''; }
@@ -676,13 +714,15 @@ function shell(inner){
   var dashIcon='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>';
   var notifIcon='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>';
   var notifItem=item('notificacoes','Notificacoes'+notifBadge,notifIcon);
+  var clienteIcon='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" style="width:15px;height:15px"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>';
   var grpProjetos=(hasAccess('meus_projetos')?item('meus_projetos','Projetos',ICONS.crm):'')
+    +(hasAccess('meus_projetos')?item('acesso_clientes','Acesso Clientes',clienteIcon):'')
     +(hasAccess('equipe')?item('equipe','Equipe',ICONS.team):'')
     +(hasAccess('projetos')?item('projetos','Lista de Tarefas',ICONS.proj):'');
   var grpFin=(hasAccess('financeiro')?item('financeiro','Financeiro',ICONS.fin):'')
     +(hasAccess('fin_rel')?item('fin_rel','Relatorios',ICONS.chart):'');
   var grpOport=hasAccess('oportunidades')
-    ?item('oportunidades','Oportunidades',ICONS.lead)+item('dashboard_agenda','Agenda de Reunioes',ICONS.dash):'';
+    ?item('oportunidades','Oportunidades',ICONS.lead):'';
   var grpAte=hasAccess('atendimento')?item('atendimento','Atendimento',ICONS.msg):'';
   var grpAdm=(hasAccess('config')?item('config','Configuracoes',ICONS.cfg):'')
     +(isAdmin()?item('usuarios','Usuarios',ICONS.user):'');
@@ -1220,6 +1260,85 @@ function pageConta(msg,err){
 }
 
 // ── CONFIGURACOES ─────────────────────────────────────────────────────────────
+function modalSubtarefas(ck, idx){
+  var stage=db.crmTemplates[ck][idx];
+  if(!stage) return;
+  var ov=document.createElement('div'); ov.className='overlay';
+
+  function draw(){
+    var subs=stage.subtasks||[];
+    ov.innerHTML='<div class="modal wide" style="max-width:560px">'
+      +'<div style="background:var(--ink);color:#F6F4F1;padding:14px 20px;border-radius:12px 12px 0 0;margin:-20px -20px 20px">'
+      +'<div style="font-size:11px;letter-spacing:.1em;text-transform:uppercase;opacity:.6;margin-bottom:2px">Etapa · '+esc(stage.code)+'</div>'
+      +'<h2 style="margin:0;font-size:18px;color:#F6F4F1">'+esc(stage.name)+'</h2>'
+      +'</div>'
+      +'<div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--faint);margin-bottom:10px">Subtarefas ('+subs.length+')</div>'
+      +'<div id="sub-list" style="display:flex;flex-direction:column;gap:6px;margin-bottom:14px">'
+      +subs.map(function(s,i){
+        return '<div class="cfg-item sub-drag-item" draggable="true" data-si="'+i+'" style="gap:8px">'
+          +'<span style="color:var(--faint);font-size:14px;cursor:grab">⠿</span>'
+          +'<input class="inp sub-name-inp" data-si="'+i+'" value="'+esc(s)+'" style="flex:1;padding:6px 10px;font-size:13px">'
+          +'<button class="btn ghost sm sub-up" data-si="'+i+'"'+(i===0?' disabled':'')+'>↑</button>'
+          +'<button class="btn ghost sm sub-dn" data-si="'+i+'"'+(i===subs.length-1?' disabled':'')+'>↓</button>'
+          +'<button class="xdel sub-del" data-si="'+i+'" title="Remover">x</button>'
+          +'</div>';
+      }).join('')
+      +'</div>'
+      +'<div style="display:flex;gap:8px;margin-bottom:16px">'
+      +'<input class="inp" id="sub-new-inp" placeholder="Nova subtarefa…" style="flex:1">'
+      +'<button class="btn" id="sub-add">Adicionar</button>'
+      +'</div>'
+      +'<div class="modal-actions">'
+      +'<button class="btn ghost" id="sub-cancel">Cancelar</button>'
+      +'<button class="btn" id="sub-save">Salvar</button>'
+      +'</div></div>';
+
+    // binds
+    ov.querySelector('#sub-cancel').onclick=function(){ ov.remove(); };
+    ov.onclick=function(e){ if(e.target===ov) ov.remove(); };
+
+    ov.querySelector('#sub-add').onclick=function(){
+      var v=ov.querySelector('#sub-new-inp').value.trim();
+      if(!v) return;
+      stage.subtasks.push(v);
+      save(); draw();
+    };
+    ov.querySelector('#sub-new-inp').onkeydown=function(e){
+      if(e.key==='Enter') ov.querySelector('#sub-add').click();
+    };
+
+    ov.querySelector('#sub-save').onclick=function(){
+      var inputs=ov.querySelectorAll('.sub-name-inp');
+      stage.subtasks=[].map.call(inputs,function(inp){ return inp.value.trim(); }).filter(Boolean);
+      save(); ov.remove(); render();
+    };
+
+    [].forEach.call(ov.querySelectorAll('.sub-del'),function(btn){
+      btn.onclick=function(){ stage.subtasks.splice(+btn.dataset.si,1); save(); draw(); };
+    });
+    [].forEach.call(ov.querySelectorAll('.sub-up'),function(btn){
+      btn.onclick=function(){ var i=+btn.dataset.si; if(i===0) return; var t=stage.subtasks[i-1]; stage.subtasks[i-1]=stage.subtasks[i]; stage.subtasks[i]=t; save(); draw(); };
+    });
+    [].forEach.call(ov.querySelectorAll('.sub-dn'),function(btn){
+      btn.onclick=function(){ var i=+btn.dataset.si; if(i>=stage.subtasks.length-1) return; var t=stage.subtasks[i+1]; stage.subtasks[i+1]=stage.subtasks[i]; stage.subtasks[i]=t; save(); draw(); };
+    });
+
+    // drag-and-drop
+    var _ds=null;
+    [].forEach.call(ov.querySelectorAll('.sub-drag-item'),function(el){
+      el.ondragstart=function(e){ _ds=+el.dataset.si; el.style.opacity='0.4'; e.dataTransfer.effectAllowed='move'; };
+      el.ondragend=function(){ el.style.opacity='1'; };
+      el.ondragover=function(e){ e.preventDefault(); el.style.outline='2px solid var(--madeira)'; };
+      el.ondragleave=function(){ el.style.outline=''; };
+      el.ondrop=function(e){ e.preventDefault(); el.style.outline=''; var di=+el.dataset.si; if(_ds===di) return; var item=stage.subtasks.splice(_ds,1)[0]; stage.subtasks.splice(di,0,item); save(); draw(); };
+    });
+  }
+
+  document.getElementById('app-root').appendChild(ov);
+  draw();
+}
+
+
 function pageConfig(){
   if(!isAdmin()){ state.page='projetos'; return pageProjetos(); }
   var cols=Object.entries(TIPOS).map(function(e){
@@ -1244,6 +1363,14 @@ function pageConfig(){
     +'<span class="okmsg" id="cfg-custos-ok" style="display:none;margin-left:10px">Salvo!</span></div>'
     +'</div>';
 
+  var supaCard='<div class="cfg" style="grid-column:1/-1"><h3>Sincronizacao com Supabase</h3>'
+    +'<div class="hint">Sincronize os dados do sistema com o banco de dados online para que todos os dispositivos e usuarios acessem as mesmas informacoes.</div>'
+    +'<div style="margin-top:12px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">'
+    +'<button class="btn" id="cfg-supa-push">↑ Enviar dados para o servidor</button>'
+    +'<button class="btn ghost" id="cfg-supa-pull">↓ Baixar dados do servidor</button>'
+    +'<span id="cfg-supa-status" style="font-size:12.5px;color:var(--dim)"></span>'
+    +'</div></div>';
+
   var gcalCard='<div class="cfg" style="grid-column:1/-1"><h3>Google Agenda</h3>'
     +'<div class="hint">Cole a URL secreta iCal do seu Google Agenda. Os eventos aparecem no Calendario de Projetos.</div>'
     +'<div style="margin-top:10px">'
@@ -1264,9 +1391,12 @@ function pageConfig(){
   var waBolCard='<div class="cfg" style="grid-column:1/-1"><h3>Mensagem de boleto (WhatsApp)</h3><div class="hint">Campos: {nome}, {parcela}, {valor}, {vencimento}, {link}</div><textarea class="inp" id="wabol-txt" style="min-height:80px">'+esc(db.waBoletoTemplate||'')+'</textarea><div style="margin-top:10px"><button class="btn sm" id="wabol-save">Salvar</button></div></div>';
   var crmCols=['arq_int','interiores'].map(function(k){
     var tpl=db.crmTemplates[k]||[];
-    return '<div class="cfg" data-ck="'+k+'" style="grid-column:1/-1"><h3>Meus Projetos — '+(CRM_TIPO_LABEL[k]||k)+'</h3><div class="hint">Etapas e subtarefas do CRM de acompanhamento.</div>'
-      +tpl.map(function(s,i){ return '<div class="cfg-item"><span class="ord">'+esc(s.code)+'</span><span><b>'+esc(s.name)+'</b>'+(s.subtasks&&s.subtasks.length?' · <span style="color:var(--faint)">'+s.subtasks.map(function(x){ return esc(x); }).join(', ')+'</span>':'')+'</span>'
+    return '<div class="cfg" data-ck="'+k+'" style="grid-column:1/-1"><h3>Meus Projetos — '+(CRM_TIPO_LABEL[k]||k)+'</h3><div class="hint">Etapas do CRM. Use ↑↓ para reordenar ou arraste.</div>'      +tpl.map(function(s,i){ return '<div class="cfg-item crm-drag-item" draggable="true" data-ck="'+k+'" data-i="'+i+'">'
+        +'<span style="color:var(--faint);font-size:16px;padding:0 4px;cursor:grab">⠿</span>'
+        +'<span class="ord">'+esc(s.code)+'</span><span style="flex:1"><b>'+esc(s.name)+'</b>'+(s.subtasks&&s.subtasks.length?' · <span style="color:var(--faint)">'+s.subtasks.map(function(x){ return esc(x); }).join(', ')+'</span>':'')+'</span>'
         +'<button class="btn ghost sm crm-sub-edit" data-ck="'+k+'" data-i="'+i+'">Subtarefas</button>'
+        +'<button class="btn ghost sm crm-stg-up" data-ck="'+k+'" data-i="'+i+'"'+(i===0?' disabled':'')+'>↑</button>'
+        +'<button class="btn ghost sm crm-stg-dn" data-ck="'+k+'" data-i="'+i+'"'+(i===tpl.length-1?' disabled':'')+'>↓</button>'
         +'<button class="xdel crm-stg-del" data-ck="'+k+'" data-i="'+i+'" title="Remover">x</button></div>'; }).join('')
       +'<div class="cfg-add"><input class="inp crm-code-inp" placeholder="Codigo (ex.: EP)" style="max-width:100px" data-ck="'+k+'"><input class="inp crm-name-inp" placeholder="Nome da etapa" data-ck="'+k+'"><button class="btn ghost sm crm-stg-add" data-ck="'+k+'">Adicionar</button></div></div>';
   }).join('');
@@ -1285,7 +1415,7 @@ function pageConfig(){
     +'<div style="font-size:12px;color:var(--faint);margin-top:6px">PNG, SVG ou JPG. Recomendado: fundo transparente ou escuro. Max 2MB.</div>'
     +'</div></div></div>';
 
-  shell('<div class="phead"><div><h1>Configuracoes</h1></div></div><div class="cfg-grid">'+logoCard+gcalCard+custoFixoCard+cols+origCard+waCard+waBolCard+waReuCard+waConfCard+crmCols+'</div>');
+  shell('<div class="phead"><div><h1>Configuracoes</h1></div></div><div class="cfg-grid">'+logoCard+supaCard+gcalCard+custoFixoCard+cols+origCard+waCard+waBolCard+waReuCard+waConfCard+crmCols+'</div>');
 
   [].forEach.call(view.querySelectorAll('.cfg-del'),function(b){ b.onclick=function(){ db.templates[b.dataset.k].splice(+b.dataset.i,1); save(); render(); }; });
   [].forEach.call(view.querySelectorAll('.cfg-add-btn'),function(b){
@@ -1296,6 +1426,54 @@ function pageConfig(){
   });
   var ori=document.getElementById('or-add'); if(ori) ori.onclick=function(){ var v=document.getElementById('or-new').value.trim(); if(!v||db.origins.indexOf(v)>=0) return; db.origins.push(v); save(); render(); };
   [].forEach.call(view.querySelectorAll('.or-del'),function(b){ b.onclick=function(){ db.origins.splice(+b.dataset.i,1); save(); render(); }; });
+  // supabase sync
+  var spush=document.getElementById('cfg-supa-push');
+  var spull=document.getElementById('cfg-supa-pull');
+  var sstatus=document.getElementById('cfg-supa-status');
+  if(spush) spush.onclick=function(){
+    spush.disabled=true; spush.textContent='Enviando…';
+    if(sstatus) sstatus.textContent='';
+    db._savedAt=Date.now();
+    fetch('https://cgpqxzlckfcahjkmkfws.supabase.co/rest/v1/studio_data?id=eq.airos',{
+      method:'PATCH',
+      headers:Object.assign({},supaHeaders(),{'Prefer':'return=minimal'}),
+      body:JSON.stringify({data:db,updated_at:new Date().toISOString()})
+    }).then(function(r){
+      spush.disabled=false; spush.textContent='↑ Enviar dados para o servidor';
+      if(r.ok||r.status===204){
+        _supaReady=true;
+        if(sstatus) sstatus.textContent='✓ Dados enviados com sucesso.';
+        setTimeout(function(){ if(sstatus) sstatus.textContent=''; },4000);
+      } else {
+        if(sstatus) sstatus.textContent='Erro '+r.status+'. Tente novamente.';
+      }
+    }).catch(function(e){
+      spush.disabled=false; spush.textContent='↑ Enviar dados para o servidor';
+      if(sstatus) sstatus.textContent='Erro de conexao. Verifique a internet.';
+    });
+  };
+  if(spull) spull.onclick=function(){
+    spull.disabled=true; spull.textContent='Baixando…';
+    fetch('https://cgpqxzlckfcahjkmkfws.supabase.co/rest/v1/studio_data?id=eq.airos&select=data',{
+      headers:supaHeaders()
+    }).then(function(r){ return r.json(); }).then(function(rows){
+      spull.disabled=false; spull.textContent='↓ Baixar dados do servidor';
+      if(rows&&rows.length&&rows[0].data&&rows[0].data.users){
+        db=rows[0].data;
+        runMigrations();
+        try{ localStorage.setItem(KEY,JSON.stringify(db)); }catch(e){}
+        _supaReady=true;
+        if(sstatus) sstatus.textContent='✓ Dados sincronizados com sucesso.';
+        setTimeout(function(){ render(); },1000);
+      } else {
+        if(sstatus) sstatus.textContent='Nenhum dado encontrado no servidor.';
+      }
+    }).catch(function(){
+      spull.disabled=false; spull.textContent='↓ Baixar dados do servidor';
+      if(sstatus) sstatus.textContent='Erro de conexao.';
+    });
+  };
+
   // google calendar ical
   var icalSave=document.getElementById('cfg-ical-save');
   if(icalSave) icalSave.onclick=function(){
@@ -1366,14 +1544,22 @@ function pageConfig(){
   var wrs=document.getElementById('wareu-save'); if(wrs) wrs.onclick=function(){ db.waReuniaoTemplate=document.getElementById('wareu-txt').value.trim(); save(); render(); };
   var wcs=document.getElementById('waconf-save'); if(wcs) wcs.onclick=function(){ db.waConfirmTemplate=document.getElementById('waconf-txt').value.trim(); save(); render(); };
   [].forEach.call(view.querySelectorAll('.crm-stg-del'),function(b){ b.onclick=function(){ if(confirm('Remover etapa?')){ db.crmTemplates[b.dataset.ck].splice(+b.dataset.i,1); save(); render(); } }; });
+  [].forEach.call(view.querySelectorAll('.crm-stg-up'),function(b){
+    b.onclick=function(){ var k=b.dataset.ck,i=+b.dataset.i,a=db.crmTemplates[k]; if(i===0) return; var t=a[i-1]; a[i-1]=a[i]; a[i]=t; save(); render(); };
+  });
+  [].forEach.call(view.querySelectorAll('.crm-stg-dn'),function(b){
+    b.onclick=function(){ var k=b.dataset.ck,i=+b.dataset.i,a=db.crmTemplates[k]; if(i>=a.length-1) return; var t=a[i+1]; a[i+1]=a[i]; a[i]=t; save(); render(); };
+  });
+  var _dSrc=null,_dKey=null;
+  [].forEach.call(view.querySelectorAll('.crm-drag-item'),function(el){
+    el.ondragstart=function(e){ _dSrc=+el.dataset.i; _dKey=el.dataset.ck; el.style.opacity='0.5'; e.dataTransfer.effectAllowed='move'; };
+    el.ondragend=function(){ el.style.opacity='1'; };
+    el.ondragover=function(e){ e.preventDefault(); el.style.outline='2px solid var(--madeira)'; };
+    el.ondragleave=function(){ el.style.outline=''; };
+    el.ondrop=function(e){ e.preventDefault(); el.style.outline=''; var di=+el.dataset.i,dk=el.dataset.ck; if(dk!==_dKey||_dSrc===di) return; var a=db.crmTemplates[dk],item=a.splice(_dSrc,1)[0]; a.splice(di,0,item); save(); render(); };
+  });
   [].forEach.call(view.querySelectorAll('.crm-sub-edit'),function(b){
-    b.onclick=function(){
-      var s=db.crmTemplates[b.dataset.ck][+b.dataset.i];
-      var ns=prompt('Subtarefas (uma por linha):',s.subtasks.join('\n'));
-      if(ns===null) return;
-      s.subtasks=ns.split('\n').map(function(x){ return x.trim(); }).filter(Boolean);
-      save(); render();
-    };
+    b.onclick=function(){ modalSubtarefas(b.dataset.ck, +b.dataset.i); };
   });
   [].forEach.call(view.querySelectorAll('.crm-stg-add'),function(b){
     b.onclick=function(){
@@ -1959,7 +2145,7 @@ function renderCrmDetail(p){
   var pct=crmPct(p);
   var shareUrl=location.href.split('#')[0]+'#share-'+p.shareToken;
   var tab=state.crmTab||'geral';
-  var contract=db.finance.contracts.find(function(c){ return c.projectId===p.id||(p.leadId&&c.leadId===p.leadId); })||null;
+  var contract=db.finance&&db.finance.contracts?db.finance.contracts.find(function(c){ return c.projectId===p.id||(p.leadId&&c.leadId===p.leadId); }):null;
   var lead=p.leadId?db.leads.find(function(l){ return l.id===p.leadId; }):null;
 
   var tl=(p.stages||[]).map(function(st){
@@ -3026,6 +3212,146 @@ function pageDashboard(){
 
     +'</div>'; // dash-home
 
+  // Calendar section
+  var calState=state.dashCalView||'mes';
+  var calDate=state.dashCalDate||(hoje.slice(0,7));
+
+  // Build calendar events
+  var calEvents=[];
+  // Reunioes com clientes
+  leads.forEach(function(l){
+    if(l.reuniaoDate){
+      calEvents.push({
+        id:'reu-'+l.id, title:l.name, date:l.reuniaoDate,
+        time:l.reuniaoTime||'', type:'reuniao',
+        color:'#7a3818', label:'Reuniao'
+      });
+    }
+  });
+  // Tarefas da equipe com prazo
+  (db.projects||[]).forEach(function(p){
+    (p.tasks||[]).forEach(function(t){
+      if(t.dueDate&&t.status!=='concluido'){
+        var assignee=t.assigneeId?db.users.find(function(u2){ return u2.id===t.assigneeId; }):null;
+        calEvents.push({
+          id:'tsk-'+t.id, title:t.name+(assignee?' ('+assignee.name.split(' ')[0]+')':''),
+          date:t.dueDate, time:'', type:'tarefa',
+          color:'#3F6273', label:'Tarefa'
+        });
+      }
+    });
+  });
+  // Google Calendar events
+  (db.googleCalEvents||[]).forEach(function(ge){
+    if(ge.start) calEvents.push({
+      id:'gcal-'+ge.id, title:ge.title, date:ge.start.slice(0,10),
+      time:'', type:'google', color:'#1A73E8', label:'Google'
+    });
+  });
+
+  function calEvtPill(ev){
+    return '<div style="background:'+ev.color+'22;border-left:3px solid '+ev.color
+      +';border-radius:3px;padding:2px 6px;margin-bottom:2px;font-size:10.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer" data-caldate="'+ev.date+'" title="'+esc(ev.title)+'">'
+      +esc(ev.title)+'</div>';
+  }
+
+  function buildDashCal(){
+    var DIAS=['Dom','Seg','Ter','Qua','Qui','Sex','Sab'];
+    var MESES_S=['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
+    var navHtml='<div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;flex-wrap:wrap">'
+      +'<div style="display:flex;gap:6px"><button class="btn ghost sm" id="dcal-prev">◀</button>'
+      +'<button class="btn ghost sm" id="dcal-today">Hoje</button>'
+      +'<button class="btn ghost sm" id="dcal-next">▶</button></div>'
+      +'<b style="flex:1;font-size:14px">'+calLabel()+'</b>'
+      +'<div style="display:flex;gap:4px">'
+      +'<button class="btn'+(calState==='mes'?' ':' ghost')+' sm" data-dv="mes">Mês</button>'
+      +'<button class="btn'+(calState==='semana'?' ':' ghost')+' sm" data-dv="semana">Semana</button>'
+      +'<button class="btn'+(calState==='dia'?' ':' ghost')+' sm" data-dv="dia">Dia</button>'
+      +'</div></div>';
+    var grid='';
+    if(calState==='mes') grid=buildMes();
+    else if(calState==='semana') grid=buildSemana();
+    else grid=buildDia();
+    return '<div class="card" style="padding:20px;margin-top:0">'+navHtml+grid+'</div>';
+  }
+
+  function calLabel(){
+    var MESES_FULL2=['Janeiro','Fevereiro','Marco','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
+    if(calState==='mes'){ var p=calDate.split('-'); return MESES_FULL2[+p[1]-1]+' '+p[0]; }
+    if(calState==='semana'){
+      var ws=weekStart(calDate);
+      var we=new Date(ws); we.setDate(we.getDate()+6);
+      return ws.getDate()+'/'+(ws.getMonth()+1)+' – '+we.getDate()+'/'+(we.getMonth()+1)+'/'+we.getFullYear();
+    }
+    var d=new Date((calDate.length===7?calDate+'-01':calDate)+'T12:00:00');
+    var DIAS2=['Dom','Seg','Ter','Qua','Qui','Sex','Sab'];
+    return DIAS2[d.getDay()]+', '+d.getDate()+'/'+(d.getMonth()+1)+'/'+d.getFullYear();
+  }
+
+  function weekStart(dt){
+    var d=new Date((dt.length===7?dt+'-01':dt)+'T12:00:00');
+    d.setDate(d.getDate()-d.getDay()); return d;
+  }
+
+  function eventsOn(date){ return calEvents.filter(function(e){ return e.date===date; }); }
+
+  function buildMes(){
+    var yr=+calDate.slice(0,4), mo=+calDate.slice(5,7)-1;
+    var first=new Date(yr,mo,1).getDay();
+    var days=new Date(yr,mo+1,0).getDate();
+    var DIAS3=['Dom','Seg','Ter','Qua','Qui','Sex','Sab'];
+    var h='<div style="display:grid;grid-template-columns:repeat(7,1fr);gap:1px;background:var(--line)">';
+    DIAS3.forEach(function(d){ h+='<div style="background:var(--surface);padding:4px;font-size:10px;font-weight:700;color:var(--faint);text-align:center">'+d+'</div>'; });
+    for(var i=0;i<first;i++) h+='<div style="background:var(--surface-2);min-height:70px"></div>';
+    for(var d2=1;d2<=days;d2++){
+      var ds=yr+'-'+String(mo+1).padStart(2,'0')+'-'+String(d2).padStart(2,'0');
+      var evs=eventsOn(ds);
+      var isT=ds===hoje;
+      h+='<div style="background:var(--surface);min-height:70px;padding:3px;'+(isT?'outline:2px solid var(--madeira);outline-offset:-2px':'')+'">'
+        +'<div style="font-size:11px;font-weight:'+(isT?'800':'500')+';color:'+(isT?'var(--madeira)':'var(--ink-2)')+';margin-bottom:2px">'+d2+'</div>'
+        +evs.slice(0,3).map(calEvtPill).join('')
+        +(evs.length>3?'<div style="font-size:9px;color:var(--faint)">+' +(evs.length-3)+'</div>':'')
+        +'</div>';
+    }
+    h+='</div>';
+    return h;
+  }
+
+  function buildSemana(){
+    var ws=weekStart(calDate);
+    var DIAS4=['Dom','Seg','Ter','Qua','Qui','Sex','Sab'];
+    var h='<div style="display:grid;grid-template-columns:repeat(7,1fr);gap:6px">';
+    for(var i=0;i<7;i++){
+      var d=new Date(ws); d.setDate(ws.getDate()+i);
+      var ds=d.toISOString().slice(0,10);
+      var evs=eventsOn(ds);
+      var isT=ds===hoje;
+      h+='<div style="background:'+(isT?'rgba(122,56,24,.06)':'var(--surface-2)')+';border-radius:8px;padding:8px;min-height:120px;border:1px solid '+(isT?'var(--madeira)':'var(--line)')+'">'
+        +'<div style="font-size:10px;font-weight:700;color:var(--faint)">'+DIAS4[d.getDay()]+'</div>'
+        +'<div style="font-size:14px;font-weight:800;color:'+(isT?'var(--madeira)':'var(--ink)')+';margin-bottom:6px">'+d.getDate()+'</div>'
+        +evs.map(calEvtPill).join('')
+        +'</div>';
+    }
+    h+='</div>';
+    return h;
+  }
+
+  function buildDia(){
+    var ds=calDate.length===7?calDate+'-01':calDate;
+    var evs=eventsOn(ds);
+    if(!evs.length) return '<div style="padding:32px;text-align:center;color:var(--faint)">Nenhum evento neste dia.</div>';
+    return '<div style="display:flex;flex-direction:column;gap:8px">'+evs.map(function(ev){
+      return '<div style="background:var(--surface-2);border:1px solid var(--line);border-left:4px solid '+ev.color+';border-radius:8px;padding:12px 16px">'
+        +'<div style="display:flex;align-items:center;gap:8px">'
+        +'<span style="font-size:10px;background:'+ev.color+'22;color:'+ev.color+';padding:2px 7px;border-radius:4px;font-weight:700">'+ev.label+'</span>'
+        +'<span style="font-size:13px;font-weight:600">'+esc(ev.title)+'</span>'
+        +(ev.time?'<span style="font-size:12px;color:var(--dim)">'+ev.time+'</span>':'')
+        +'</div></div>';
+    }).join('')+'</div>';
+  }
+
+  html+=buildDashCal();
+
   shell(html);
 
   // Binds
@@ -3040,6 +3366,35 @@ function pageDashboard(){
       render();
     };
   });
+
+  // Calendar nav
+  var dp=document.getElementById('dcal-prev');
+  var dn=document.getElementById('dcal-next');
+  var dt2=document.getElementById('dcal-today');
+  if(dp) dp.onclick=function(){ state.dashCalDate=shiftCal(-1); render(); };
+  if(dn) dn.onclick=function(){ state.dashCalDate=shiftCal(1); render(); };
+  if(dt2) dt2.onclick=function(){ state.dashCalDate=hoje.slice(0,7); state.dashCalView='mes'; render(); };
+  [].forEach.call(view.querySelectorAll('[data-dv]'),function(b){
+    b.onclick=function(){ state.dashCalView=b.dataset.dv; render(); };
+  });
+
+  function shiftCal(dir){
+    var cv=state.dashCalView||'mes';
+    var dt=state.dashCalDate||(hoje.slice(0,7));
+    if(cv==='mes'){
+      var yr=+dt.slice(0,4), mo=+dt.slice(5,7)-1+dir;
+      if(mo<0){ mo=11; yr--; } if(mo>11){ mo=0; yr++; }
+      return yr+'-'+String(mo+1).padStart(2,'0');
+    }
+    if(cv==='semana'){
+      var d=new Date((dt.length===7?dt+'-01':dt)+'T12:00:00');
+      d.setDate(d.getDate()+dir*7);
+      return d.toISOString().slice(0,10);
+    }
+    var d2=new Date((dt.length===7?dt+'-01':dt)+'T12:00:00');
+    d2.setDate(d2.getDate()+dir);
+    return d2.toISOString().slice(0,10);
+  }
 }
 
 
@@ -3078,7 +3433,7 @@ function pageNotificacoes(){
 // ══════════════════════════════════════════════════════════════════════════════
 // DASHBOARD INICIAL
 // ══════════════════════════════════════════════════════════════════════════════
-function pageDashboard(){
+function pageAgendaReunioes(){
   var mk=curMonth();
   var cm=collectMonth(mk);
   var entRec=cm.entradas.filter(function(e){ return e.paid; }).reduce(function(s,e){ return s+e.value; },0);
@@ -3920,13 +4275,333 @@ function parseIcal(raw){
   return events;
 }
 
+function generateNotifs(){
+  if(!db.notifs) db.notifs=[];
+  var hoje=today();
+  var generated=[];
+  // Reunioes amanha
+  var amanha=new Date(); amanha.setDate(amanha.getDate()+1);
+  var amanhaStr=amanha.toISOString().slice(0,10);
+  (db.leads||[]).forEach(function(l){
+    if(l.status==='reuniao'&&l.reuniaoDate===amanhaStr){
+      generated.push({id:'reu-'+l.id,type:'reuniao',text:'Reuniao amanha com '+l.name,date:amanhaStr,read:false});
+    }
+  });
+  // Etapas atrasadas
+  (db.crmProjects||[]).forEach(function(p){
+    (p.stages||[]).forEach(function(s){
+      if(s.end&&s.end<hoje&&s.status!=='concluido'){
+        generated.push({id:'eta-'+p.id+'-'+s.id,type:'atraso',text:'Etapa atrasada: '+p.client+' — '+s.name,date:s.end,read:false});
+      }
+    });
+  });
+  // Merge with existing
+  var existingIds=db.notifs.map(function(n){ return n.id; });
+  generated.forEach(function(n){
+    if(existingIds.indexOf(n.id)<0) db.notifs.push(n);
+  });
+}
+
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ACESSO CLIENTES
+// ══════════════════════════════════════════════════════════════════════════════
+
+function getClienteToken(){
+  var h=location.hash;
+  return h.indexOf('#cliente-')===0?h.slice(9):null;
+}
+
+// ── Página de listagem (admin) ─────────────────────────────────────────────────
+function pageAcessoClientes(){
+  var fechados=db.crmProjects.filter(function(p){ return p.status==='fechado'||p.stages&&p.stages.length>0; });
+  var rows=fechados.length?fechados.map(function(p){
+    var url=location.href.split('#')[0]+'#cliente-'+p.clienteToken;
+    var comments=(p.clienteComments||[]).length;
+    var atasConf=(p.atas||[]).filter(function(a){ return a.ataStatus==='confirmado'||a.ataStatus==='ressalvas'; }).length;
+    var atasTotal=(p.atas||[]).length;
+    return '<div class="trow" style="grid-template-columns:1fr auto auto auto">'
+      +'<div class="tname">'+esc(p.client)+'<span class="tsub">'+(p.type?CRM_TIPO_LABEL[p.type]||p.type:'')+'</span>'
+      +(comments?'<span style="font-size:11px;color:var(--madeira);margin-left:8px">'+comments+' comentário'+(comments>1?'s':'')+'</span>':'')
+      +(atasTotal?'<span style="font-size:11px;color:var(--dim);margin-left:8px">'+atasConf+'/'+atasTotal+' atas confirmadas</span>':'')
+      +'</div>'
+      +'<button class="btn ghost sm cli-copy" data-url="'+esc(url)+'">Copiar link</button>'
+      +'<a href="'+esc(url)+'" target="_blank" class="btn ghost sm">Abrir</a>'
+      +'</div>';
+  }).join(''):'<div class="empty"><div class="big">Nenhum projeto disponível</div><div>Projetos aparecerão aqui quando criados em Meus Projetos.</div></div>';
+
+  shell('<div class="phead"><div><h1>Acesso Clientes</h1><div class="sub">Links individuais para cada cliente acompanhar o projeto.</div></div></div>'
+    +'<div class="card" style="overflow:hidden">'+rows+'</div>');
+
+  [].forEach.call(view.querySelectorAll('.cli-copy'),function(b){
+    b.onclick=function(){
+      navigator.clipboard.writeText(b.dataset.url).then(function(){
+        b.textContent='Copiado!'; setTimeout(function(){ b.textContent='Copiar link'; },2000);
+      });
+    };
+  });
+}
+
+// ── Portal do cliente (página pública) ────────────────────────────────────────
+function renderClienteView(token){
+  // Try to find project in db, else fetch from Supabase
+  var p=db.crmProjects.find(function(c){ return c.clienteToken===token; });
+  if(!p){
+    view.innerHTML='<div style="min-height:100vh;background:#F6F4F1;display:flex;align-items:center;justify-content:center;font-family:sans-serif">'
+      +'<div style="text-align:center"><div style="font-size:18px;font-weight:600;margin-bottom:8px">Carregando…</div>'
+      +'<div style="font-size:13px;color:#999">Buscando seu projeto.</div></div></div>';
+    fetch('https://cgpqxzlckfcahjkmkfws.supabase.co/rest/v1/studio_data?id=eq.airos&select=data',{
+      headers:{'apikey':'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNncHF4emxja2ZjYWhqa21rZndzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODU5OTg1NzYsImV4cCI6MjEwMTU3NDU3Nn0.dPXN5TR2XKJM0HLMuScv1RiLL3hH71feLnhEoiiYITQ',
+       'Authorization':'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNncHF4emxja2ZjYWhqa21rZndzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODU5OTg1NzYsImV4cCI6MjEwMTU3NDU3Nn0.dPXN5TR2XKJM0HLMuScv1RiLL3hH71feLnhEoiiYITQ'}
+    }).then(function(r){ return r.json(); }).then(function(rows){
+      if(rows&&rows.length&&rows[0].data){
+        db=rows[0].data; runMigrations();
+        try{ localStorage.setItem('airos_v5',JSON.stringify(db)); }catch(e){}
+      }
+      var p2=db.crmProjects.find(function(c){ return c.clienteToken===token; });
+      if(p2) buildClienteView(p2);
+      else view.innerHTML='<div style="padding:40px;background:#F6F4F1;min-height:100vh;font-family:sans-serif"><h2>Projeto não encontrado</h2><p>Verifique o link recebido.</p></div>';
+    }).catch(function(){
+      view.innerHTML='<div style="padding:40px;background:#F6F4F1;min-height:100vh;font-family:sans-serif"><h2>Erro ao carregar</h2><p>Verifique sua conexão.</p></div>';
+    });
+    return;
+  }
+  buildClienteView(p);
+}
+
+function buildClienteView(p){
+  var tab=state.clienteTab||'tarefas';
+  var MESES=['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
+
+  function fmtBR(d){ if(!d) return '—'; var pt=d.split('-'); return pt[2]+'/'+pt[1]+'/'+pt[0]; }
+  function fmtR(v){ return 'R$ '+(+v||0).toLocaleString('pt-BR',{minimumFractionDigits:2}); }
+
+  // Header
+  var header='<div style="background:var(--ink);color:#F6F4F1;padding:0">'
+    +'<div style="padding:16px 24px;display:flex;align-items:center;gap:14px;border-bottom:1px solid rgba(255,255,255,.1)">'
+    +'<img src="'+LOGO+'" alt="Airos" style="height:32px;filter:brightness(0) invert(1)">'
+    +'<div><div style="font-size:13px;font-weight:600;color:#F6F4F1">'+esc(p.client)+'</div>'
+    +'<div style="font-size:11px;opacity:.6">Acompanhamento do projeto</div></div>'
+    +'</div>'
+    // Tabs
+    +'<div style="display:flex;gap:0;padding:0 24px">'
+    +['tarefas','financeiro','documentos','atas','historico'].map(function(t){
+      var labels={tarefas:'Tarefas',financeiro:'Financeiro',documentos:'Documentos',atas:'Atas',historico:'Histórico'};
+      return '<button style="background:none;border:none;color:'+(tab===t?'#F6F4F1':'rgba(255,255,255,.5)')+';border-bottom:2px solid '+(tab===t?'#F6F4F1':'transparent')+';padding:12px 16px;font-size:13px;font-weight:'+(tab===t?'600':'400')+';cursor:pointer;font-family:inherit" class="cli-tab" data-t="'+t+'">'+labels[t]+'</button>';
+    }).join('')
+    +'</div></div>';
+
+  // Tab content
+  var body='';
+
+  if(tab==='tarefas'){
+    var stages=p.stages||[];
+    body='<div style="padding:24px;max-width:760px;margin:0 auto">';
+    if(!stages.length){ body+='<div style="text-align:center;padding:40px;color:#999">Nenhuma etapa cadastrada ainda.</div>'; }
+    stages.forEach(function(s){
+      var subtasks=s.subtasks||[];
+      var done=subtasks.filter(function(x){ return x.done; }).length;
+      var pct=subtasks.length?Math.round(done/subtasks.length*100):0;
+      var statusColor=s.status==='concluido'?'#27AE60':s.status==='andamento'?'#7a3818':'#999';
+      body+='<div style="background:#fff;border:1px solid #e0dbd5;border-radius:12px;padding:18px 20px;margin-bottom:12px">'
+        +'<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">'
+        +'<span style="font-size:11px;font-weight:700;background:'+statusColor+'22;color:'+statusColor+';padding:2px 8px;border-radius:4px">'+esc(s.code)+'</span>'
+        +'<span style="font-size:14px;font-weight:600">'+esc(s.name)+'</span>'
+        +'<span style="font-size:11px;color:#999;margin-left:auto">'+(s.start?fmtBR(s.start):'')+( s.end?' → '+fmtBR(s.end):'')+'</span>'
+        +'</div>'
+        +(subtasks.length?'<div style="background:#f5f5f5;border-radius:6px;height:6px;margin-bottom:10px"><div style="background:'+statusColor+';border-radius:6px;height:6px;width:'+pct+'%"></div></div>':'')
+        +(subtasks.length?'<div style="display:flex;flex-direction:column;gap:4px">'
+          +subtasks.map(function(st){
+            var isDone=st.done||false;
+            return '<div style="display:flex;align-items:center;gap:8px;font-size:13px;color:'+(isDone?'#999':'#333')+';text-decoration:'+(isDone?'line-through':'none')+'">'
+              +'<svg viewBox="0 0 20 20" style="width:14px;height:14px;flex-shrink:0"><circle cx="10" cy="10" r="9" fill="'+(isDone?'#27AE60':'none')+'" stroke="'+(isDone?'#27AE60':'#ccc')+'" stroke-width="1.5"/>'+(isDone?'<polyline points="6,10 9,13 14,7" stroke="#fff" stroke-width="1.5" fill="none"/>':'')+'</svg>'
+              +esc(typeof st==='string'?st:st.name||st)+'</div>';
+          }).join('')
+          +'</div>':'')
+        +'</div>';
+    });
+    body+='</div>';
+  }
+
+  else if(tab==='financeiro'){
+    var fin=db.finance||{incomes:[],expenses:[],contracts:[]};
+    var contract=(fin.contracts||[]).find(function(c){ return c.projectId===p.id||(p.leadId&&c.leadId===p.leadId); })||null;
+    var incomes=(fin.incomes||[]).filter(function(i){ return i.projectId===p.id||(p.leadId&&i.leadId===p.leadId); });
+    var totalPago=incomes.filter(function(i){ return i.paid; }).reduce(function(s,i){ return s+(+i.amount||0); },0);
+    var totalPendente=incomes.filter(function(i){ return !i.paid; }).reduce(function(s,i){ return s+(+i.amount||0); },0);
+    body='<div style="padding:24px;max-width:760px;margin:0 auto">';
+    if(contract){
+      body+='<div style="background:#fff;border:1px solid #e0dbd5;border-radius:12px;padding:20px;margin-bottom:16px">'
+        +'<div style="font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:#999;margin-bottom:12px">Contrato</div>'
+        +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">'
+        +'<div><div style="font-size:11px;color:#999">Valor total</div><div style="font-size:16px;font-weight:700">'+fmtR(contract.value||0)+'</div></div>'
+        +'<div><div style="font-size:11px;color:#999">Prazo</div><div style="font-size:14px">'+fmtBR(contract.endDate)+'</div></div>'
+        +'</div></div>';
+    }
+    body+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px">'
+      +'<div style="background:#fff;border:1px solid #e0dbd5;border-radius:12px;padding:16px">'
+      +'<div style="font-size:11px;color:#999;margin-bottom:4px">Pago</div>'
+      +'<div style="font-size:20px;font-weight:700;color:#27AE60">'+fmtR(totalPago)+'</div></div>'
+      +'<div style="background:#fff;border:1px solid #e0dbd5;border-radius:12px;padding:16px">'
+      +'<div style="font-size:11px;color:#999;margin-bottom:4px">A pagar</div>'
+      +'<div style="font-size:20px;font-weight:700;color:#7a3818">'+fmtR(totalPendente)+'</div></div>'
+      +'</div>';
+    if(incomes.length){
+      body+='<div style="background:#fff;border:1px solid #e0dbd5;border-radius:12px;overflow:hidden">'
+        +incomes.map(function(i){
+          return '<div style="padding:12px 16px;border-bottom:1px solid #f0ebe5;display:flex;justify-content:space-between;align-items:center">'
+            +'<div><div style="font-size:13px;font-weight:500">'+esc(i.description||i.desc||'Pagamento')+'</div>'
+            +'<div style="font-size:11px;color:#999">'+fmtBR(i.date)+'</div></div>'
+            +'<div style="text-align:right"><div style="font-size:14px;font-weight:600;color:'+(i.paid?'#27AE60':'#7a3818')+'">'+fmtR(i.amount)+'</div>'
+            +'<div style="font-size:11px;color:#999">'+(i.paid?'Pago':'Pendente')+'</div></div>'
+            +'</div>';
+        }).join('')
+        +'</div>';
+    } else { body+='<div style="text-align:center;padding:32px;color:#999">Nenhum lançamento financeiro ainda.</div>'; }
+    body+='</div>';
+  }
+
+  else if(tab==='documentos'){
+    var gallery=p.gallery||[];
+    body='<div style="padding:24px;max-width:760px;margin:0 auto">';
+    if(!gallery.length){ body+='<div style="text-align:center;padding:40px;color:#999">Nenhum documento disponível ainda.</div>'; }
+    else{
+      body+='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px">'
+        +gallery.map(function(g){
+          return '<a href="'+g.url+'" target="_blank" style="background:#fff;border:1px solid #e0dbd5;border-radius:10px;padding:14px;text-decoration:none;color:#333;display:flex;flex-direction:column;align-items:center;gap:8px">'
+            +'<svg viewBox="0 0 24 24" fill="none" stroke="#7a3818" stroke-width="1.5" style="width:32px;height:32px"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>'
+            +'<span style="font-size:12px;text-align:center;word-break:break-word">'+esc(g.name||'Documento')+'</span>'
+            +'</a>';
+        }).join('')
+        +'</div>';
+    }
+    body+='</div>';
+  }
+
+  else if(tab==='atas'){
+    var atas=(p.atas||[]).slice().sort(function(a,b){ return b.ts-a.ts; });
+    body='<div style="padding:24px;max-width:760px;margin:0 auto">';
+    if(!atas.length){ body+='<div style="text-align:center;padding:40px;color:#999">Nenhuma ata registrada ainda.</div>'; }
+    atas.forEach(function(a){
+      var statusColor=a.ataStatus==='confirmado'?'#27AE60':a.ataStatus==='ressalvas'?'#E67E22':'#999';
+      var statusLabel=a.ataStatus==='confirmado'?'Confirmada':a.ataStatus==='ressalvas'?'Com ressalvas':'Aguardando';
+      function secAta(title,items,color){
+        if(!items||!items.length) return '';
+        return '<div style="margin-bottom:14px"><div style="font-size:10px;letter-spacing:.1em;text-transform:uppercase;font-weight:700;color:'+color+';margin-bottom:6px">'+title+'</div>'
+          +'<ul style="margin:0;padding:0 0 0 18px">'+items.map(function(i){ return '<li style="font-size:13px;line-height:1.7;margin-bottom:3px">'+esc(i)+'</li>'; }).join('')+'</ul></div>';
+      }
+      body+='<div style="background:#fff;border:1px solid #e0dbd5;border-radius:12px;padding:20px;margin-bottom:12px">'
+        +'<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px">'
+        +'<div><div style="font-size:14px;font-weight:600">Ata v'+a.ver+(a.stageName?' — '+esc(a.stageName):'')+'</div>'
+        +'<div style="font-size:12px;color:#999">'+fmtBR(a.date)+'</div></div>'
+        +'<span style="font-size:11px;background:'+statusColor+'22;color:'+statusColor+';padding:3px 10px;border-radius:20px;font-weight:600">'+statusLabel+'</span>'
+        +'</div>'
+        +(a.structured?secAta('Ajustes solicitados',a.structured.ajustes,'#C0392B')+secAta('Decisões tomadas',a.structured.decisoes,'#1E8449')+secAta('Pendências',a.structured.pendencias,'#B7770D')+secAta('Próximos passos',a.structured.proximosPassos,'#7a3818'):'')
+        +(a.ataStatus==='pendente'?
+          '<div style="border-top:1px solid #f0ebe5;margin-top:14px;padding-top:14px">'
+          +'<div style="font-size:13px;font-weight:500;margin-bottom:8px">Sua confirmação</div>'
+          +'<textarea id="cli-ata-notes-'+a.id+'" style="width:100%;border:1px solid #ddd;border-radius:8px;padding:10px;font-size:13px;font-family:inherit;resize:vertical;min-height:80px;margin-bottom:10px" placeholder="Adicione observações ou pontos que faltaram (opcional)…">'+esc(a.ataNotes||'')+'</textarea>'
+          +'<div style="display:flex;gap:8px">'
+          +'<button class="cli-ata-confirm" data-id="'+a.id+'" data-status="confirmado" style="flex:1;background:#111;color:#fff;border:none;border-radius:8px;padding:11px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit">✓ Confirmar ata</button>'
+          +'<button class="cli-ata-confirm" data-id="'+a.id+'" data-status="ressalvas" style="flex:1;background:#fff;color:#111;border:1px solid #ddd;border-radius:8px;padding:11px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit">Confirmar com ressalvas</button>'
+          +'</div></div>'
+          : (a.ataNotes?'<div style="background:#f9f9f9;border-radius:8px;padding:12px;margin-top:10px;font-size:13px;color:#555;font-style:italic">'+esc(a.ataNotes)+'</div>':''))
+        +'</div>';
+    });
+    body+='</div>';
+  }
+
+  else if(tab==='historico'){
+    var hist=(p.history||[]).slice().reverse();
+    body='<div style="padding:24px;max-width:760px;margin:0 auto">';
+    if(!hist.length){ body+='<div style="text-align:center;padding:40px;color:#999">Nenhum histórico ainda.</div>'; }
+    else{
+      body+='<div style="background:#fff;border:1px solid #e0dbd5;border-radius:12px;overflow:hidden">'
+        +hist.map(function(h){
+          var d=h.ts?new Date(h.ts):null;
+          var dtStr=d?d.getDate()+'/'+(d.getMonth()+1)+'/'+d.getFullYear()+' '+d.getHours()+':'+String(d.getMinutes()).padStart(2,'0'):'';
+          return '<div style="padding:12px 16px;border-bottom:1px solid #f0ebe5;display:flex;gap:12px">'
+            +'<div style="width:36px;height:36px;border-radius:50%;background:#F6F4F1;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:14px">📋</div>'
+            +'<div><div style="font-size:13px;color:#333">'+esc(h.action||h.text||'')+'</div>'
+            +'<div style="font-size:11px;color:#999;margin-top:2px">'+(h.user?esc(h.user)+' · ':'')+dtStr+'</div></div></div>';
+        }).join('')
+        +'</div>';
+    }
+    // Comment box
+    body+='<div style="background:#fff;border:1px solid #e0dbd5;border-radius:12px;padding:16px;margin-top:16px">'
+      +'<div style="font-size:13px;font-weight:600;margin-bottom:8px">Adicionar comentário</div>'
+      +'<textarea id="cli-comment-inp" style="width:100%;border:1px solid #ddd;border-radius:8px;padding:10px;font-size:13px;font-family:inherit;resize:vertical;min-height:72px;margin-bottom:8px" placeholder="Escreva um comentário…"></textarea>'
+      +'<input id="cli-comment-name" style="width:100%;border:1px solid #ddd;border-radius:8px;padding:8px 10px;font-size:13px;font-family:inherit;margin-bottom:8px" placeholder="Seu nome (opcional)">'
+      +'<button id="cli-comment-btn" style="background:#111;color:#fff;border:none;border-radius:8px;padding:10px 20px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit">Enviar comentário</button>'
+      +'</div>';
+    body+='</div>';
+  }
+
+  view.innerHTML='<div style="background:#F6F4F1;min-height:100vh">'+header+'<div>'+body+'</div></div>';
+
+  // Binds
+  [].forEach.call(view.querySelectorAll('.cli-tab'),function(btn){
+    btn.onclick=function(){ state.clienteTab=btn.dataset.t; buildClienteView(p); };
+  });
+
+  // Ata confirm
+  [].forEach.call(view.querySelectorAll('.cli-ata-confirm'),function(btn){
+    btn.onclick=function(){
+      var ata=p.atas.find(function(a){ return a.id===btn.dataset.id; });
+      if(!ata) return;
+      var notesEl=document.getElementById('cli-ata-notes-'+ata.id);
+      ata.ataNotes=notesEl?notesEl.value.trim():'';
+      ata.ataStatus=btn.dataset.status;
+      if(!p.history) p.history=[];
+      p.history.push({ts:Date.now(),user:p.client+' (cliente)',action:'Ata v'+ata.ver+' '+(btn.dataset.status==='confirmado'?'confirmada.':'confirmada com ressalvas.')});
+      save();
+      buildClienteView(p);
+    };
+  });
+
+  // Comment
+  var commentBtn=document.getElementById('cli-comment-btn');
+  if(commentBtn) commentBtn.onclick=function(){
+    var txt=document.getElementById('cli-comment-inp').value.trim();
+    var name=document.getElementById('cli-comment-name').value.trim();
+    if(!txt) return;
+    if(!p.clienteComments) p.clienteComments=[];
+    p.clienteComments.push({id:uid(),text:txt,author:name||'Cliente',ts:Date.now()});
+    if(!p.history) p.history=[];
+    p.history.push({ts:Date.now(),user:(name||'Cliente')+' (cliente)',action:'Comentário: '+txt.slice(0,60)+(txt.length>60?'…':'')});
+    save();
+    state.clienteTab='historico';
+    buildClienteView(p);
+  };
+}
+
 function render(){
   var token=getShareToken();
-  if(token){ renderShareView(token); return; }
+  if(token){
+    var found=db.crmProjects.find(function(c){ return c.shareToken===token; });
+    if(found){ renderShareView(token); return; }
+    // Not found locally - show loading and fetch from Supabase
+    view.innerHTML='<div style="min-height:100vh;background:#F6F4F1;display:flex;align-items:center;justify-content:center;font-family:sans-serif">'
+      +'<div style="text-align:center"><div style="font-size:18px;font-weight:600;margin-bottom:8px">Carregando projeto…</div>'
+      +'<div style="font-size:13px;color:#999">Aguarde um momento.</div></div></div>';
+    fetch('https://cgpqxzlckfcahjkmkfws.supabase.co/rest/v1/studio_data?id=eq.airos&select=data',{
+      headers:{'apikey':'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNncHF4emxja2ZjYWhqa21rZndzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODU5OTg1NzYsImV4cCI6MjEwMTU3NDU3Nn0.dPXN5TR2XKJM0HLMuScv1RiLL3hH71feLnhEoiiYITQ','Authorization':'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNncHF4emxja2ZjYWhqa21rZndzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODU5OTg1NzYsImV4cCI6MjEwMTU3NDU3Nn0.dPXN5TR2XKJM0HLMuScv1RiLL3hH71feLnhEoiiYITQ'}
+    }).then(function(r){ return r.json(); }).then(function(rows){
+      if(rows&&rows.length&&rows[0].data&&rows[0].data.crmProjects){
+        db=rows[0].data;
+        runMigrations();
+        try{ localStorage.setItem('airos_v5',JSON.stringify(db)); }catch(e){}
+      }
+      renderShareView(token);
+    }).catch(function(){ renderShareView(token); });
+    return;
+  }
   var appr=getApproveToken();
   if(appr){ renderApproveView(appr.token,appr.stageId); return; }
   var ataToken=getAtaToken();
   if(ataToken){ renderAtaView(ataToken); return; }
+  var clienteToken=getClienteToken();
+  if(clienteToken){ renderClienteView(clienteToken); return; }
   if(!me()){ renderLogin(); return; }
   generateNotifs();
   function blocked(mod){ if(!hasAccess(mod)){ shell('<div class="empty"><div class="big">Acesso restrito</div>Voce nao tem permissao para acessar este modulo.</div>'); return true; } return false; }
@@ -3937,6 +4612,7 @@ function render(){
   if(state.page==='equipe'){ if(!blocked('equipe')) pageEquipe(); return; }
   if(state.page==='oportunidades'||state.page==='dashboard_agenda'){ if(!blocked('oportunidades')) pageOportunidades(); return; }
   if(state.page==='meus_projetos'){ if(!blocked('meus_projetos')) pageMeusProjetos(); return; }
+  if(state.page==='acesso_clientes'){ if(!blocked('meus_projetos')) pageAcessoClientes(); return; }
   if(state.page==='atendimento'){ if(!blocked('atendimento')) pageAtendimento(); return; }
   if(state.page==='financeiro'){ if(!blocked('financeiro')) pageFinanceiro(); return; }
   if(state.page==='fin_rel'){ if(!blocked('fin_rel')) pageFinRelatorios(); return; }
@@ -3948,7 +4624,19 @@ function render(){
 
 function renderShareView(token){
   var p=db.crmProjects.find(function(c){ return c.shareToken===token; });
-  if(!p){ view.innerHTML='<div style="padding:40px;font-family:sans-serif;background:#F6F4F1;min-height:100vh"><h2>Projeto nao encontrado</h2><p>Verifique o link recebido.</p></div>'; return; }
+  if(!p){
+    // Try loading from Supabase first
+    if(_supaReady===false||db.crmProjects.length===0){
+      view.innerHTML='<div style="min-height:100vh;background:#F6F4F1;display:flex;align-items:center;justify-content:center;font-family:sans-serif"><div style="text-align:center"><div style="font-size:18px;font-weight:600;margin-bottom:8px">Carregando projeto…</div><div style="font-size:13px;color:#999">Aguarde um momento.</div></div></div>';
+      setTimeout(function(){
+        var p2=db.crmProjects.find(function(c){ return c.shareToken===token; });
+        if(p2) renderShareView(token);
+        else view.innerHTML='<div style="padding:40px;font-family:sans-serif;background:#F6F4F1;min-height:100vh"><h2>Projeto nao encontrado</h2><p>Verifique o link recebido.</p></div>';
+      },3000);
+      return;
+    }
+    view.innerHTML='<div style="padding:40px;font-family:sans-serif;background:#F6F4F1;min-height:100vh"><h2>Projeto nao encontrado</h2><p>Verifique o link recebido.</p></div>'; return;
+  }
   var pct=crmPct(p);
   var tab=state.shareTab||'geral';
   var contract=db.finance.contracts.find(function(c){ return c.projectId===p.id||(p.leadId&&c.leadId===p.leadId); })||null;
@@ -4086,8 +4774,11 @@ function renderShareView(token){
 
 // ── BOOT ──────────────────────────────────────────────────────────────────────
 render();
-  supaLoad();
-  window._airos={
+supaLoad();
+window._airos={
+    push:function(){ supaPush(db); },
+    load:function(){ supaLoad(); },
+    isReady:function(){ return _supaReady; },
     syncCal:function(){
       var url=db.googleCalIcal;
       if(!url){ console.error('No iCal URL'); return; }
