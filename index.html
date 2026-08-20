@@ -1,4 +1,4 @@
-<!DOCTYPE html><!-- v7 -->
+<!DOCTYPE html><!-- v8 -->
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Airos Arquitetura — Gestão do Estúdio</title>
@@ -424,7 +424,7 @@ function supaHeaders(){
 function supaPush(data){
   if(_supaSyncing) return;
   _supaSyncing=true;
-  data._savedAt=Date.now();
+  if(!data._savedAt) data._savedAt=Date.now();
   try{ localStorage.setItem(KEY,JSON.stringify(data)); }catch(e){}
   fetch(SUPA_URL+'/rest/v1/studio_data?id=eq.airos',{
     method:'PATCH',
@@ -458,22 +458,28 @@ function supaLoad(){
       if(rows&&rows.length&&rows[0].data&&rows[0].data.users){
         var remote=rows[0].data;
         var local=loadDB();
-        if(!local||!local._savedAt||(remote._savedAt||0)>=(local._savedAt||0)){
+        var localTime=local&&local._savedAt?local._savedAt:0;
+        var remoteTime=remote._savedAt||0;
+        if(remoteTime>localTime){
+          // remote is newer - use it
           try{ localStorage.setItem(KEY,JSON.stringify(remote)); }catch(e){}
           db=remote;
           runMigrations();
           render();
         } else {
+          // local is newer or equal - push local to remote
+          _supaReady=true;
           supaPush(db);
         }
       } else {
+        // Supabase empty - push local data up
+        _supaReady=true;
         supaPush(db);
       }
     })
     .catch(function(e){
       console.warn('Supabase unavailable:',e.message);
       _supaReady=false;
-      // retry every 30 seconds
       setTimeout(supaLoad, 30000);
     });
 }
