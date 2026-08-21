@@ -1,4 +1,4 @@
-<!DOCTYPE html><!-- v9 -->
+<!DOCTYPE html><!-- v9-1787313619 -->
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Airos Arquitetura — Gestão do Estúdio</title>
@@ -448,6 +448,8 @@ function supaPush(data){
 }
 
 function supaLoad(){
+  // Safe load - NEVER overwrites local data automatically
+  // Only sets _supaReady=true and pushes local data if Supabase is empty
   fetch(SUPA_URL+'/rest/v1/studio_data?id=eq.airos&select=data',{headers:supaHeaders()})
     .then(function(r){
       if(!r.ok) throw new Error('HTTP '+r.status);
@@ -455,33 +457,35 @@ function supaLoad(){
     })
     .then(function(rows){
       _supaReady=true;
-      if(rows&&rows.length&&rows[0].data&&rows[0].data.users){
-        var remote=rows[0].data;
-        var local=loadDB();
-        var localTime=local&&local._savedAt?local._savedAt:0;
-        var remoteTime=remote._savedAt||0;
-        if(remoteTime>localTime){
-          // remote is newer - use it
-          try{ localStorage.setItem(KEY,JSON.stringify(remote)); }catch(e){}
-          db=remote;
-          runMigrations();
-          render();
-        } else {
-          // local is newer or equal - push local to remote
-          _supaReady=true;
-          supaPush(db);
-        }
-      } else {
+      var hasRemote=rows&&rows.length&&rows[0].data&&rows[0].data.users&&rows[0].data.users.length>0;
+      if(!hasRemote){
         // Supabase empty - push local data up
-        _supaReady=true;
         supaPush(db);
       }
+      // NEVER overwrite local data automatically
+      // User must manually sync via Configuracoes
     })
     .catch(function(e){
       console.warn('Supabase unavailable:',e.message);
       _supaReady=false;
-      setTimeout(supaLoad, 30000);
     });
+}
+
+function supaLoadAndReplace(){
+  // Only called explicitly by the user via Configuracoes button
+  fetch(SUPA_URL+'/rest/v1/studio_data?id=eq.airos&select=data',{headers:supaHeaders()})
+    .then(function(r){ return r.json(); })
+    .then(function(rows){
+      _supaReady=true;
+      if(rows&&rows.length&&rows[0].data&&rows[0].data.users){
+        var remote=rows[0].data;
+        try{ localStorage.setItem(KEY,JSON.stringify(remote)); }catch(e){}
+        db=remote;
+        runMigrations();
+        render();
+      }
+    })
+    .catch(function(e){ console.warn('supaLoadAndReplace failed:',e.message); });
 }
 
 function saveDB(d){
@@ -1465,12 +1469,17 @@ function pageConfig(){
     }).then(function(r){ return r.json(); }).then(function(rows){
       spull.disabled=false; spull.textContent='↓ Baixar dados do servidor';
       if(rows&&rows.length&&rows[0].data&&rows[0].data.users){
-        db=rows[0].data;
-        runMigrations();
-        try{ localStorage.setItem(KEY,JSON.stringify(db)); }catch(e){}
-        _supaReady=true;
-        if(sstatus) sstatus.textContent='✓ Dados sincronizados com sucesso.';
-        setTimeout(function(){ render(); },1000);
+        var remote=rows[0].data;
+        if(confirm('Isso vai substituir TODOS os dados locais pelos dados do servidor. Tem certeza?')){
+          db=remote;
+          runMigrations();
+          try{ localStorage.setItem(KEY,JSON.stringify(db)); }catch(e){}
+          _supaReady=true;
+          if(sstatus) sstatus.textContent='✓ Dados sincronizados com sucesso.';
+          setTimeout(function(){ render(); },1000);
+        } else {
+          if(sstatus) sstatus.textContent='Cancelado.';
+        }
       } else {
         if(sstatus) sstatus.textContent='Nenhum dado encontrado no servidor.';
       }
@@ -4925,7 +4934,8 @@ function renderShareView(token){
 
 // ── BOOT ──────────────────────────────────────────────────────────────────────
 render();
-supaLoad();
+// supaLoad removed from auto-boot to prevent data loss
+// Use Configuracoes > Sincronizar to manually sync
 window._airos={
     push:function(){ supaPush(db); },
     load:function(){ supaLoad(); },
