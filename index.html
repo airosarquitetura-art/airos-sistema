@@ -1,4 +1,4 @@
-<!DOCTYPE html><!-- v8 -->
+<!DOCTYPE html><!-- v9 -->
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Airos Arquitetura — Gestão do Estúdio</title>
@@ -4579,6 +4579,151 @@ function buildClienteView(p){
     state.clienteTab='historico';
     buildClienteView(p);
   };
+}
+
+
+function modalPrecificacao(lead){
+  var tipo = lead.projType||'arq_int';
+  var tplStages = (db.crmTemplates[tipo]||db.crmTemplates.arq_int||[]);
+
+  var prec = lead.precificacao ? JSON.parse(JSON.stringify(lead.precificacao)) : {
+    area: lead.briefing&&lead.briefing.area?parseFloat(lead.briefing.area)||0:0,
+    tipo: tipo,
+    margem: 30,
+    desconto: 0,
+    stages: tplStages.map(function(s){ return {code:s.code, name:s.name, userId:'', horas:0}; })
+  };
+  tplStages.forEach(function(s){
+    if(!prec.stages.find(function(ps){ return ps.code===s.code; })){
+      prec.stages.push({code:s.code,name:s.name,userId:'',horas:0});
+    }
+  });
+
+  var ov = document.createElement('div'); ov.className='overlay';
+
+  function calc(){
+    var custoBase = prec.stages.reduce(function(sum,s){
+      var rate = s.userId&&db.hourlyRates[s.userId]?db.hourlyRates[s.userId]:0;
+      return sum + (s.horas||0)*rate;
+    },0);
+    var comMargem = custoBase / (1 - (prec.margem||0)/100);
+    var comDesconto = comMargem * (1 - (prec.desconto||0)/100);
+    var m2val = prec.area>0 ? comDesconto/prec.area : 0;
+    var refM2 = db.m2Reference[prec.tipo]||150;
+    var totalHoras = prec.stages.reduce(function(s,st){ return s+(st.horas||0); },0);
+    return {custoBase:custoBase, comMargem:comMargem, final:comDesconto, m2val:m2val, refM2:refM2, totalHoras:totalHoras};
+  }
+
+  function fmtM(v){ return 'R$ '+Math.round(v).toLocaleString('pt-BR'); }
+
+  function draw(){
+    var r = calc();
+    var userOpts = '<option value="">Selecionar...</option>'
+      + db.users.map(function(u){
+          var rate = db.hourlyRates[u.id]||0;
+          return '<option value="'+u.id+'">'+esc(u.name)+(rate?' (R$'+rate+'/h)':'')+'</option>';
+        }).join('');
+
+    var diff = r.refM2>0 && r.m2val>0 ? Math.round((r.m2val-r.refM2)/r.refM2*100) : null;
+    var diffLabel = diff===null?'—':diff>20?'Acima da referencia (bom)':diff>0?'Levemente acima':diff>-20?'Levemente abaixo':'Abaixo da referencia';
+
+    ov.innerHTML = '<div class="modal wide" style="max-width:760px">'
+      +'<div style="background:var(--madeira);color:#F6F4F1;padding:14px 20px;border-radius:12px 12px 0 0;margin:-20px -20px 20px">'
+      +'<div style="font-size:11px;letter-spacing:.12em;text-transform:uppercase;font-weight:700;opacity:.7;margin-bottom:2px">Precificacao</div>'
+      +'<h2 style="margin:0;font-size:20px;color:#F6F4F1">'+esc(lead.name)+'</h2>'
+      +'</div>'
+      +'<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:16px">'
+      +'<div class="field"><label>Area (m²)</label><input class="inp" id="pc-area" type="number" min="0" step="1" value="'+(prec.area||0)+'"></div>'
+      +'<div class="field"><label>Margem de lucro (%)</label><input class="inp" id="pc-margem" type="number" min="0" max="90" step="1" value="'+(prec.margem||30)+'"></div>'
+      +'<div class="field"><label>Desconto (%)</label><input class="inp" id="pc-desconto" type="number" min="0" max="50" step="1" value="'+(prec.desconto||0)+'"></div>'
+      +'</div>'
+      +'<div style="border-top:1px solid var(--line);padding-top:14px;margin-bottom:14px">'
+      +'<div style="font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint);font-weight:700;margin-bottom:10px">Taxa por profissional (R$/hora)</div>'
+      +'<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:8px">'
+      + db.users.map(function(u){
+          var rate = db.hourlyRates[u.id]||0;
+          return '<div class="field" style="margin:0"><label style="font-size:12px">'+esc(u.name)+'</label>'
+            +'<input class="inp hr-inp" data-uid="'+u.id+'" type="number" min="0" step="10" value="'+rate+'" style="font-size:13px"></div>';
+        }).join('')
+      +'</div></div>'
+      +'<div style="border-top:1px solid var(--line);padding-top:14px;margin-bottom:4px">'
+      +'<div style="font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint);font-weight:700;margin-bottom:8px">Horas por etapa</div>'
+      +'<div style="display:grid;grid-template-columns:60px 1fr 1fr 80px 90px;font-size:11px;font-weight:700;color:var(--faint);padding:0 4px 6px;border-bottom:1px solid var(--line)">'
+      +'<span>Cod.</span><span>Etapa</span><span>Profissional</span><span>Horas</span><span style="text-align:right">Valor</span></div>'
+      + prec.stages.map(function(s,i){
+          var rate = s.userId&&db.hourlyRates[s.userId]?db.hourlyRates[s.userId]:0;
+          var val = (s.horas||0)*rate;
+          return '<div style="display:grid;grid-template-columns:60px 1fr 1fr 80px 90px;padding:8px 4px;border-bottom:1px solid var(--line);align-items:center">'
+            +'<span style="font-size:12px;font-weight:700;color:var(--madeira)">'+esc(s.code)+'</span>'
+            +'<span style="font-size:13px">'+esc(s.name)+'</span>'
+            +'<select class="inp st-user" data-i="'+i+'" style="font-size:12px;padding:4px 6px">'+userOpts.replace('value="'+s.userId+'"','value="'+s.userId+'" selected')+'</select>'
+            +'<input class="inp st-horas" data-i="'+i+'" type="number" min="0" step="0.5" value="'+(s.horas||0)+'" style="font-size:13px;padding:4px 8px">'
+            +'<span style="font-size:12.5px;font-weight:600;text-align:right;padding-right:4px">'+fmtM(val)+'</span>'
+            +'</div>';
+        }).join('')
+      +'<div style="display:flex;justify-content:flex-end;gap:24px;padding:10px 4px 0;font-size:13px;font-weight:700;border-top:1px solid var(--line)">'
+      +'<span style="color:var(--faint)">'+r.totalHoras+'h totais</span>'
+      +'<span style="color:var(--madeira)">Custo: '+fmtM(r.custoBase)+'</span>'
+      +'</div></div>'
+      +'<div style="border-top:2px solid var(--line);margin-top:16px;padding-top:16px">'
+      +'<div style="font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint);font-weight:700;margin-bottom:12px">Resultado</div>'
+      +'<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px;margin-bottom:14px">'
+      +'<div class="kpi"><div class="v">'+fmtM(r.custoBase)+'</div><div class="l">Custo da equipe</div></div>'
+      +'<div class="kpi"><div class="v">'+fmtM(r.comMargem)+'</div><div class="l">Com margem '+( prec.margem||0)+'%</div></div>'
+      +(prec.desconto>0?'<div class="kpi"><div class="v">'+fmtM(r.final)+'</div><div class="l">Com desconto '+(prec.desconto||0)+'%</div></div>':'')
+      +'<div class="kpi" style="border:2px solid var(--madeira)"><div class="v" style="color:var(--madeira)">'+fmtM(r.final)+'</div><div class="l">Valor final sugerido</div></div>'
+      +'</div>'
+      +(r.m2val>0?'<div style="background:'+(diff!==null&&diff<-20?'var(--alerta)':'var(--verde)')+';color:#fff;border-radius:10px;padding:12px 16px;display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">'
+        +'<div><div style="font-size:13px;font-weight:700">'+diffLabel+'</div>'
+        +(diff!==null?'<div style="font-size:12px;opacity:.85">Seu valor esta '+Math.abs(diff)+'% '+(diff>0?'acima':'abaixo')+' da referencia</div>':'')
+        +'</div>'+(diff!==null?'<div style="font-size:24px;font-weight:800">'+(diff>0?'+':'')+diff+'%</div>':'')
+        +'</div>':'')
+      +'</div>'
+      +'<div class="modal-actions" style="margin-top:16px">'
+      +'<button class="btn ghost" id="pc-cancel">Cancelar</button>'
+      +'<button class="btn ghost" id="pc-calc">Recalcular</button>'
+      +'<button class="btn" id="pc-save">Salvar precificacao</button>'
+      +'</div></div>';
+
+    bind();
+  }
+
+  function readAndRecalc(){
+    prec.area = parseFloat(ov.querySelector('#pc-area').value)||0;
+    prec.margem = parseFloat(ov.querySelector('#pc-margem').value)||30;
+    prec.desconto = parseFloat(ov.querySelector('#pc-desconto').value)||0;
+    [].forEach.call(ov.querySelectorAll('.hr-inp'),function(inp){
+      if(inp.dataset.uid){ db.hourlyRates[inp.dataset.uid]=parseFloat(inp.value)||0; }
+    });
+    [].forEach.call(ov.querySelectorAll('.st-user'),function(sel){
+      prec.stages[+sel.dataset.i].userId=sel.value;
+    });
+    [].forEach.call(ov.querySelectorAll('.st-horas'),function(inp){
+      prec.stages[+inp.dataset.i].horas=parseFloat(inp.value)||0;
+    });
+  }
+
+  function bind(){
+    ov.querySelector('#pc-cancel').onclick=function(){ ov.remove(); };
+    ov.onclick=function(e){ if(e.target===ov) ov.remove(); };
+    ov.querySelector('#pc-calc').onclick=function(){ readAndRecalc(); draw(); };
+    [].forEach.call(ov.querySelectorAll('.st-horas,.st-user,.hr-inp,#pc-area,#pc-margem,#pc-desconto'),function(el){
+      el.onchange=function(){ readAndRecalc(); draw(); };
+    });
+    ov.querySelector('#pc-save').onclick=function(){
+      readAndRecalc();
+      var r=calc();
+      lead.precificacao=JSON.parse(JSON.stringify(prec));
+      lead.precificacao._resultado={custo:r.custoBase,final:r.final,m2val:r.m2val,refM2:r.refM2,totalHoras:r.totalHoras,ts:Date.now()};
+      if(r.final>0&&(!lead.value||lead.value===0)){
+        lead.value=Math.round(r.final/100)*100;
+      }
+      save(); ov.remove(); render();
+    };
+  }
+
+  document.getElementById('app-root').appendChild(ov);
+  draw();
 }
 
 function render(){
